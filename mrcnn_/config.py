@@ -213,7 +213,6 @@ class Config(object):
     def __init__(self):
         """Set values of computed attributes."""
         # Effective batch size
-        self.BATCH_SIZE = 64
 
         # Input image size
         if self.IMAGE_RESIZE_MODE == "crop":

@@ -39,11 +39,12 @@ ROOT_DIR = os.path.abspath("C:/Users/CGIP/Desktop/github/Mask_RCNN")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
-from mrcnn.config import Config
-from mrcnn import model as modellib, utils
+from mrcnn_.config import Config
+import mrcnn_.model as modellib
+import mrcnn_.utils as utils
 
-import image_processing as iu
-import matrix_processing as mu
+import samples.liver.image_processing as iu
+import samples.liver.matrix_processing as mu
 
 # Path to trained weights file
 COCO_WEIGHTS_PATH = os.path.join(ROOT_DIR, "mask_rcnn_coco.h5")
@@ -66,7 +67,7 @@ class LiverConfig(Config):
 
     # We use a GPU with 12GB memory, which can fit two images.
     # Adjust down if you use a smaller GPU.
-    IMAGES_PER_GPU = 1
+    IMAGES_PER_GPU = 64
 
     # Number of classes (including background)
     NUM_CLASSES = 1 + 1  # Background + balloon
@@ -78,7 +79,7 @@ class LiverConfig(Config):
     DETECTION_MIN_CONFIDENCE = 0.9
 
     BACKBONE_STRIDES  = [4, 8, 16, 32, 64]
-    RPN_ANCHOR_SCALES = (8, 16, 32, 64, 128)
+    RPN_ANCHOR_SCALES = (4, 8, 16, 32, 64)
     RPN_TRAIN_ANCHORS_PER_IMAGE = 10
 
     # ROIs kept after tf.nn.top_k and before non-maximum suppression
@@ -93,6 +94,10 @@ class LiverConfig(Config):
     IMAGE_MAX_DIM = 128
 
     TRAIN_ROIS_PER_IMAGE = 20
+    BATCH_SIZE = 64
+    DEPTH = 64
+
+    LEARNING_RATE = 0.0001
 
 
 ############################################################
@@ -164,11 +169,14 @@ class LiverDataset(utils.Dataset):
             label = ni.affine_transform(label, matrix=info["mat"]) > 0.5
             label = label.astype(np.uint8)
 
-        label = label.transpose(1, 2, 0)
+        label = np.expand_dims(label, axis=3)
+
+        class_ids = iu.get_class_ids(label)
+        class_ids = class_ids.reshape(-1, 1).astype(np.int32)
 
         # Return mask, and array of class IDs of each instance. Since we have
         # one class ID only, we return an array of 1s
-        return label.astype(np.bool), np.ones([label.shape[-1]], dtype=np.int32)
+        return label.astype(np.bool), class_ids # [64, 128, 128, 1], [64, 1]
 
     def load_image(self, image_id):
         """Generate instance masks for an image.
@@ -193,9 +201,23 @@ class LiverDataset(utils.Dataset):
         image = iu.normalize(image, -340, 360)
         image = image.transpose(1, 2, 0)
 
+        image = np.expand_dims(image, axis=0)
+        input2d = image[:, :, :, 0:2]
+        single = image[:, :, :, 0:1]
+        input2d = np.concatenate([input2d, single], axis=3)
+        for i in range(self.depth - 2):
+            input2d_tmp = image[:, :, :, i:i + 3]
+            input2d = np.concatenate([input2d, input2d_tmp], axis=0)
+            if i == self.depth - 3:
+                final1 = image[:, :, :, self.depth - 2:self.depth]
+                final2 = image[:, :, :, self.depth - 1:self.depth]
+                final = np.concatenate([final1, final2], axis=3)
+                input2d = np.concatenate([input2d, final], axis=0)
+        image = input2d[:, :, :, :]
+
         # Return mask, and array of class IDs of each instance. Since we have
         # one class ID only, we return an array of 1s
-        return image
+        return image # [64, 128, 128, 3]
 
     def image_reference(self, image_id):
         """Return the path of the image."""

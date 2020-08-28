@@ -84,6 +84,144 @@ def compute_backbone_shapes(config, image_shape):
             int(math.ceil(image_shape[1] / stride))]
             for stride in config.BACKBONE_STRIDES])
 
+############################################################
+#  VAModule
+############################################################
+
+def va_graph(input_image, in_channel):
+    """Build a Volumetric-Attention graph.
+        input_image: [b(64), h, w, c]
+    """
+    batch, h, w, c = input_image.shape
+
+    for b in range(batch):
+        if b==0:
+            feature = input_image[b:b+3]
+        elif b==(batch-1):
+            feature = input_image[b-3:b]
+        else:
+            feature = input_image[b-1:b+2]
+
+        ca = channel_attention(input_image[b:b + 1], feature, in_channel, str(b)+"_ca_")
+        sa = spatial_attention(input_image[b:b + 1], feature, str(b)+"_sa_")
+
+        ca_mul = KL.Multiply()([input_image[b:b + 1], ca])
+        sa_mul = KL.Multiply()([ca_mul, sa])
+        if b==0:
+            output = sa_mul
+        else:
+            output = KL.Concatenate(axis=0)([output, sa_mul])
+
+    return output
+
+def channel_attention(input_image, feature, in_channel, name, feature_bag=3, reduction_ratio=16):
+    """Build a Volumetric-Attention graph.
+        input_image: [1, h, w, c]
+        feature: [3, h, w, c]
+    """
+    x = spatial_pool(input_image)
+    x = KL.Conv2D(in_channel//reduction_ratio, (1, 1), strides=1, padding="same",
+                  name=name+'conv1_1', use_bias=True)(x)
+    x = BatchNorm(name=name+'bn1_1')(x, training=True)
+    x = KL.Activation('relu')(x)
+    x = KL.Conv2D(in_channel, (1, 1), strides=1, padding="same",
+                  name=name+'conv1_2', use_bias=True)(x)
+    x = BatchNorm(name=name+'bn1_2')(x, training=True)
+    x = KL.Activation('relu')(x) # [1, 1, 1, c]
+
+    f = K.expand_dims(feature, axis=0)
+    f = KL.Permute((2, 3, 4, 1))(f)
+    f = KL.Reshape((f.shape[1], f.shape[2], -1))(f)
+    f = spatial_pool(f) # [1, 1, 1, feature_bag*c]
+
+    f1 = KL.Conv2D(in_channel * feature_bag // reduction_ratio, (1, 1), strides=1, padding="same",
+                  name=name+'conv2_1', use_bias=True)(f)
+    f1 = BatchNorm(name=name+'bn2_1')(f1, training=True)
+    f1 = KL.Activation('relu')(f1)
+    f1 = KL.Conv2D(in_channel * feature_bag, (1, 1), strides=1, padding="same",
+                  name=name+'conv2_2', use_bias=True)(f1)
+    f1 = BatchNorm(name=name+'bn2_2')(f1, training=True)
+    f1 = KL.Activation('relu')(f1)
+
+    f2 = KL.Conv2D(in_channel * feature_bag // reduction_ratio, (1, 1), strides=1, padding="same",
+                   name=name+'conv3_1', use_bias=True)(f)
+    f2 = BatchNorm(name=name+'bn3_1')(f2, training=True)
+    f2 = KL.Activation('relu')(f2)
+    f2 = KL.Conv2D(in_channel * 3, (1, 1), strides=1, padding="same",
+                   name=name+'conv3_2', use_bias=True)(f2)
+    f2 = BatchNorm(name=name+'bn3_2')(f2, training=True)
+    f2 = KL.Activation('relu')(f2)
+
+    x = KL.Reshape((1, -1))(x)
+    f1 = KL.Reshape((-1, feature_bag))(f1)
+    x_f1 = K.dot(x, f1)
+    x_f1 = KL.Reshape((1, -1))(x_f1)
+    x_f1 = KL.Activation("softmax")(x_f1)
+
+    f2 = KL.Reshape((feature_bag, -1))(f2)
+    x_f1_f2 = K.dot(x_f1, f2)
+
+    out = KL.Activation('relu')(x_f1_f2)
+    out = KL.Conv2D(in_channel, (1, 1), strides=1, padding="same",
+                   name=name+'conv4', use_bias=True)(out)
+    out = KL.Activation('sigmoid')(out)
+
+    return out
+
+def spatial_attention(input_image, feature, name, feature_bag=3):
+    """Build a Volumetric-Attention graph.
+        input_image: [1, h, w, c]
+        feature: [3, h, w, c]
+    """
+    _, h, w, c = input_image.shape
+
+    x = channel_pool(input_image)
+    x = KL.Conv2D(2, (1, 1), strides=1, padding="same",
+                  name=name+'conv1_1', use_bias=True)(x)
+    x = BatchNorm(name=name+'bn1_1')(x, training=True)
+    x = KL.Activation('relu')(x) # [1, h, w, 2]
+
+    f = channel_pool(feature)
+    f = K.expand_dims(f, axis=0)
+    f = KL.Permute((2, 3, 4, 1))(f)
+    f = KL.Reshape((h, w, -1))(f)
+
+    f1 = KL.Conv2D(2 * feature_bag, (1, 1), strides=1, padding="same",
+                  name=name+'conv2_1', use_bias=True)(f)
+    f1 = BatchNorm(name=name+'bn2_1')(f1, training=True)
+    f1 = KL.Activation('relu')(f1)
+
+    f2 = KL.Conv2D(2 * feature_bag, (1, 1), strides=1, padding="same",
+                  name=name+'conv2_2', use_bias=True)(f)
+    f2 = BatchNorm(name=name+'bn2_2')(f2, training=True)
+    f2 = KL.Activation('relu')(f2)
+
+    x = KL.Reshape((-1, 2))(x)
+    f1 = KL.Reshape((feature_bag * 2, -1))(f1)
+    x_f1 = K.dot(f1, x)
+    x_f1 = KL.Reshape((-1, 2))(x_f1)
+    x_f1 = KL.Activation("softmax")(x_f1) # [feature_bag * 2, 2]
+
+    f2 = KL.Reshape((-1, feature_bag * 2))(f2)
+    x_f1_f2 = K.dot(f2, x_f1)
+    x_f1_f2 = KL.Reshape((h, w, -1))(x_f1_f2)
+
+    out = KL.Activation('relu')(x_f1_f2)
+    out = KL.Conv2D(1, (1, 1), strides=1, padding="same",
+                   name=name+'conv3', use_bias=True)(out)
+    out = KL.Activation('sigmoid')(out)
+
+    return out
+
+def spatial_pool(input_image):
+    out = KL.GlobalAveragePooling2D()(input_image)
+    out = KL.Reshape((1, 1, -1))(out)
+    return out
+
+def channel_pool(input_image):
+    avg_pool = KL.Lambda(lambda x: K.mean(x, axis=3, keepdims=True))(input_image)
+    max_pool = KL.Lambda(lambda x: K.max(x, axis=3, keepdims=True))(input_image)
+    return KL.Concatenate(axis=3)([avg_pool, max_pool])
 
 ############################################################
 #  Resnet Graph
@@ -1213,7 +1351,7 @@ def mrcnn_mask_loss_graph(target_masks, target_class_ids, pred_masks):
 #  Data Generator
 ############################################################
 
-def load_image_gt(dataset, config, image_id, augmentation=None):
+def load_image_gt(dataset, config, image_id, image, mask, class_ids, augmentation=None):
     """Load and return ground truth data for an image (image, mask, bounding boxes).
 
     augmentation: Optional. An imgaug (https://github.com/aleju/imgaug) augmentation.
@@ -1230,8 +1368,6 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
         defined in MINI_MASK_SHAPE.
     """
     # Load image and mask
-    image = dataset.load_image(image_id)
-    mask, class_ids = dataset.load_mask(image_id)
     original_shape = image.shape
     image, window, scale, padding, crop = utils.resize_image(
         image,
@@ -1240,37 +1376,6 @@ def load_image_gt(dataset, config, image_id, augmentation=None):
         max_dim=config.IMAGE_MAX_DIM,
         mode=config.IMAGE_RESIZE_MODE)
     mask = utils.resize_mask(mask, scale, padding, crop)
-
-    # Augmentation
-    # This requires the imgaug lib (https://github.com/aleju/imgaug)
-    if augmentation:
-        import imgaug
-
-        # Augmenters that are safe to apply to masks
-        # Some, such as Affine, have settings that make them unsafe, so always
-        # test your augmentation on masks
-        MASK_AUGMENTERS = ["Sequential", "SomeOf", "OneOf", "Sometimes",
-                           "Fliplr", "Flipud", "CropAndPad",
-                           "Affine", "PiecewiseAffine"]
-
-        def hook(images, augmenter, parents, default):
-            """Determines which augmenters to apply to masks."""
-            return augmenter.__class__.__name__ in MASK_AUGMENTERS
-
-        # Store shapes before augmentation to compare
-        image_shape = image.shape
-        mask_shape = mask.shape
-        # Make augmenters deterministic to apply similarly to images and masks
-        det = augmentation.to_deterministic()
-        image = det.augment_image(image)
-        # Change mask to np.uint8 because imgaug doesn't support np.bool
-        mask = det.augment_image(mask.astype(np.uint8),
-                                 hooks=imgaug.HooksImages(activator=hook))
-        # Verify that shapes didn't change
-        assert image.shape == image_shape, "Augmentation shouldn't change image size"
-        assert mask.shape == mask_shape, "Augmentation shouldn't change mask size"
-        # Change mask back to bool
-        mask = mask.astype(np.bool)
 
     # Note that some boxes might be all zeros if the corresponding mask got cropped out.
     # and here is to filter them out
@@ -1698,25 +1803,25 @@ class DataGenerator(KU.Sequence):
         self.augmentation = augmentation
         self.random_rois = random_rois
         self.batch_size = self.config.BATCH_SIZE
+        self.depth = self.config.DEPTH
         self.detection_targets = detection_targets
 
     def __len__(self):
         return int(np.ceil(len(self.image_ids) / float(self.batch_size)))
 
     def __getitem__(self, idx):
-        b = 0
-        image_index = -1
-        while b < self.batch_size:
-            # Increment index to pick next image. Shuffle if at the start of an epoch.
-            image_index = (image_index + 1) % len(self.image_ids)
+        # Get GT bounding boxes and masks for image.
+        image_id = self.image_ids[idx]
 
-            if self.shuffle and image_index == 0:
-                np.random.shuffle(self.image_ids)
+        # Load image and mask
+        images = self.dataset.load_image(image_id)
+        masks, class_ids = self.dataset.load_mask(image_id)
 
-            # Get GT bounding boxes and masks for image.
-            image_id = self.image_ids[image_index]
+        init = False
+        for b in range(self.depth):
             image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
                 load_image_gt(self.dataset, self.config, image_id,
+                              image=images[b], mask=masks[b], class_ids=class_ids[b],
                               augmentation=self.augmentation)
 
             # Skip images that have no instances. This can happen in cases
@@ -1739,34 +1844,35 @@ class DataGenerator(KU.Sequence):
                             rpn_rois, gt_class_ids, gt_boxes, gt_masks, self.config)
 
             # Init batch arrays
-            if b == 0:
+            if not init:
                 batch_image_meta = np.zeros(
-                    (self.batch_size,) + image_meta.shape, dtype=image_meta.dtype)
+                    (self.depth,) + image_meta.shape, dtype=image_meta.dtype)
                 batch_rpn_match = np.zeros(
-                    [self.batch_size, self.anchors.shape[0], 1], dtype=rpn_match.dtype)
+                    [self.depth, self.anchors.shape[0], 1], dtype=rpn_match.dtype)
                 batch_rpn_bbox = np.zeros(
-                    [self.batch_size, self.config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=rpn_bbox.dtype)
+                    [self.depth, self.config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=rpn_bbox.dtype)
                 batch_images = np.zeros(
-                    (self.batch_size,) + image.shape, dtype=np.float32)
+                    (self.depth,) + image.shape, dtype=np.float32)
                 batch_gt_class_ids = np.zeros(
-                    (self.batch_size, self.config.MAX_GT_INSTANCES), dtype=np.int32)
+                    (self.depth, self.config.MAX_GT_INSTANCES), dtype=np.int32)
                 batch_gt_boxes = np.zeros(
-                    (self.batch_size, self.config.MAX_GT_INSTANCES, 4), dtype=np.int32)
+                    (self.depth, self.config.MAX_GT_INSTANCES, 4), dtype=np.int32)
                 batch_gt_masks = np.zeros(
-                    (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
+                    (self.depth, gt_masks.shape[0], gt_masks.shape[1],
                      self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
                 if self.random_rois:
                     batch_rpn_rois = np.zeros(
-                        (self.batch_size, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
+                        (self.depth, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
                     if self.detection_targets:
                         batch_rois = np.zeros(
-                            (self.batch_size,) + rois.shape, dtype=rois.dtype)
+                            (self.depth,) + rois.shape, dtype=rois.dtype)
                         batch_mrcnn_class_ids = np.zeros(
-                            (self.batch_size,) + mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
+                            (self.depth,) + mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
                         batch_mrcnn_bbox = np.zeros(
-                            (self.batch_size,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
+                            (self.depth,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
                         batch_mrcnn_mask = np.zeros(
-                            (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
+                            (self.depth,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
+                init = True
 
             # If more instances than fits in the array, sub-sample from them.
             if gt_boxes.shape[0] > self.config.MAX_GT_INSTANCES:
@@ -1796,6 +1902,9 @@ class DataGenerator(KU.Sequence):
         inputs = [batch_images, batch_image_meta, batch_rpn_match, batch_rpn_bbox,
                   batch_gt_class_ids, batch_gt_boxes, batch_gt_masks]
         outputs = []
+
+        #print(batch_images.shape, batch_image_meta.shape, batch_rpn_match.shape, batch_rpn_bbox.shape,
+        #      batch_gt_class_ids.shape, batch_gt_boxes.shape, batch_gt_masks.shape)
 
         if self.random_rois:
             inputs.extend([batch_rpn_rois])
@@ -2012,6 +2121,9 @@ class MaskRCNN(object):
             # TODO: clean up (use tf.identify if necessary)
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
 
+            print(input_rpn_match.shape, rpn_class_logits.shape, input_rpn_bbox.shape, rpn_bbox.shape,
+                  target_class_ids.shape, mrcnn_class_logits.shape, active_class_ids.shape)
+
             # Losses
             rpn_class_loss = KL.Lambda(lambda x: rpn_class_loss_graph(*x), name="rpn_class_loss")(
                 [input_rpn_match, rpn_class_logits])
@@ -2177,10 +2289,12 @@ class MaskRCNN(object):
             if 'gamma' not in w.name and 'beta' not in w.name]
         self.keras_model.add_loss(tf.add_n(reg_losses))
 
+        self.keras_model.run_eagerly = True
+
         # Compile
         self.keras_model.compile(
             optimizer=optimizer,
-            loss=[None] * len(self.keras_model.outputs))
+            loss=[None] * len(self.keras_model.outputs),)
 
         # Add metrics for losses
         for name in loss_names:
@@ -2333,7 +2447,7 @@ class MaskRCNN(object):
             keras.callbacks.TensorBoard(log_dir=self.log_dir,
                                         histogram_freq=0, write_graph=True, write_images=False),
             keras.callbacks.ModelCheckpoint(self.checkpoint_path,
-                                            verbose=0, save_weights_only=True),
+                                            verbose=1, save_weights_only=True),
         ]
 
         # Add custom callbacks to the list
@@ -2345,6 +2459,8 @@ class MaskRCNN(object):
         log("Checkpoint Path: {}".format(self.checkpoint_path))
         self.set_trainable(layers)
         self.compile(learning_rate, self.config.LEARNING_MOMENTUM)
+
+        log(self.keras_model.summary())
 
         # Work-around for Windows: Keras fails on Windows when using
         # multiprocessing workers. See discussion here:
@@ -2793,12 +2909,12 @@ def mold_image(images, config):
     the mean pixel and converts it to float. Expects image
     colors in RGB order.
     """
-    return images.astype(np.float32) - config.MEAN_PIXEL
+    return images.astype(np.float32)
 
 
 def unmold_image(normalized_images, config):
     """Takes a image normalized with mold() and returns the original."""
-    return (normalized_images + config.MEAN_PIXEL).astype(np.uint8)
+    return (normalized_images).astype(np.uint8)
 
 
 ############################################################
