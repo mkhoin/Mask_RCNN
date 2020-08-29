@@ -92,24 +92,30 @@ class VA_Module(KL.Layer):
     """Build a Volumetric-Attention graph.
         input_image: [b(64), h, w, c]
     """
-    def __init__(self, in_channel, batch_size, name):
+    def __init__(self, in_channel, batch_size, name, feature_bag=9):
         super(VA_Module, self).__init__(name=name)
         self.in_channel = in_channel
         self.batch_size = batch_size
+        self.feature_bag = feature_bag
 
-        self.channel_attention = channel_attention(in_channel,  self.name + "_ca_")
-        self.spatial_attention = spatial_attention(self.name + "_sa_")
+        self.channel_attention = channel_attention(in_channel,  self.name + "_ca_", self.feature_bag)
+        self.spatial_attention = spatial_attention(self.name + "_sa_", self.feature_bag)
 
     def call(self, input_image):
         batch, h, w, c = input_image.shape
 
+        interval = int(self.feature_bag // 2)
         for b in range(self.batch_size):
-            if b == 0:
-                feature = input_image[b:b + 3]
-            elif b == (batch - 1):
-                feature = input_image[b - 3:b]
+            if b < interval:
+                feature = KL.Concatenate(axis=0)([input_image[:b],
+                                                  K.repeat_elements(input_image[b], interval-b, axis=0),
+                                                  input_image[b:b + interval + 1]])
+            elif self.batch_size - b <= interval:
+                feature = KL.Concatenate(axis=0)([input_image[b - interval:b],
+                                                  K.repeat_elements(input_image[b], interval-(self.batch_size - b)+1, axis=0),
+                                                  input_image[b:]])
             else:
-                feature = input_image[b - 1:b + 2]
+                feature = input_image[b - interval:b + interval+1]
 
             ca = self.channel_attention([input_image[b:b + 1], feature])
             sa = self.spatial_attention([input_image[b:b + 1], feature])
@@ -123,10 +129,10 @@ class VA_Module(KL.Layer):
         return output
 
 class channel_attention(KL.Layer):
-    def __init__(self, in_channel, name):
+    def __init__(self, in_channel, name, feature_bag):
         super(channel_attention, self).__init__(name=name)
         self.in_channel = in_channel
-        self.feature_bag = 3
+        self.feature_bag = feature_bag
         self.reduction_ratio = 16
 
         self.c1_1 = KL.Conv2D(self.in_channel // self.reduction_ratio, (1, 1), strides=1, padding="same",
@@ -204,9 +210,9 @@ class channel_attention(KL.Layer):
         return out
 
 class spatial_attention(KL.Layer):
-    def __init__(self, name):
+    def __init__(self, name, feature_bag):
         super(spatial_attention, self).__init__(name=name)
-        self.feature_bag = 3
+        self.feature_bag = feature_bag
         self.c1_1 = KL.Conv2D(2, (1, 1), strides=1, padding="same",
                       name=name + 'conv1_1', use_bias=True)
         self.bn1_1 = BatchNorm(name=name + 'bn1_1')
@@ -2078,10 +2084,10 @@ class MaskRCNN(object):
         # subsampling from P5 with stride of 2.
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
 
-        P2 = VA_Module(256, config.BATCH_SIZE, "P2")(P2)
-        P3 = VA_Module(256, config.BATCH_SIZE, "P3")(P3)
-        P4 = VA_Module(256, config.BATCH_SIZE, "P4")(P4)
-        P5 = VA_Module(256, config.BATCH_SIZE, "P5")(P5)
+        #P2 = VA_Module(256, config.BATCH_SIZE, "P2")(P2)
+        #P3 = VA_Module(256, config.BATCH_SIZE, "P3")(P3)
+        #P4 = VA_Module(256, config.BATCH_SIZE, "P4")(P4)
+        #P5 = VA_Module(256, config.BATCH_SIZE, "P5")(P5)
 
         #P2 = va_graph(P2, 256, config.BATCH_SIZE, "P2")
         #P3 = va_graph(P3, 256, config.BATCH_SIZE, "P3")

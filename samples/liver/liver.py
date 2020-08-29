@@ -62,51 +62,7 @@ class LiverConfig(Config):
     """Configuration for training on the toy  dataset.
     Derives from the base Config class and overrides some values.
     """
-    # Give the configuration a recognizable name
-    NAME = "liver"
-
-    # We use a GPU with 12GB memory, which can fit two images.
-    # Adjust down if you use a smaller GPU.
-    IMAGES_PER_GPU = 64
-
-    # Number of classes (including background)
-    NUM_CLASSES = 1 + 1  # Background + balloon
-
-    # Number of training steps per epoch
-    STEPS_PER_EPOCH = 100
-
-    # Skip detections with < 90% confidence
-    DETECTION_MIN_CONFIDENCE = 0.9
-
-    BACKBONE_STRIDES  = [4, 8, 16, 32, 64]
-    RPN_ANCHOR_SCALES = (2, 4, 8, 16, 32)
-    RPN_TRAIN_ANCHORS_PER_IMAGE = 10
-
-    # ROIs kept after tf.nn.top_k and before non-maximum suppression
-    PRE_NMS_LIMIT = 60
-
-    # ROIs kept after non-maximum suppression (training and inference)
-    POST_NMS_ROIS_TRAINING = 20
-    POST_NMS_ROIS_INFERENCE = 10
-
-    IMAGE_RESIZE_MODE = "none"
-    IMAGE_MIN_DIM = 128
-    IMAGE_MAX_DIM = 128
-
-    TRAIN_ROIS_PER_IMAGE = 20
-
-    LEARNING_RATE = 0.001
-    MAX_GT_INSTANCES = 1
-
-    DETECTION_MAX_INSTANCES = 1
-
-    LOSS_WEIGHTS = {
-        "rpn_class_loss": 1.,
-        "rpn_bbox_loss": 1.,
-        "mrcnn_class_loss": 1e-2,
-        "mrcnn_bbox_loss": 1.,
-        "mrcnn_mask_loss": 10
-    }
+    pass
 
 
 ############################################################
@@ -263,7 +219,7 @@ def train(model):
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
                 epochs=150,
-                layers='heads')
+                layers='all')
 
 
 def test(model, dst_path):
