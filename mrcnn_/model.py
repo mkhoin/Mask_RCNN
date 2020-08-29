@@ -88,130 +88,182 @@ def compute_backbone_shapes(config, image_shape):
 #  VAModule
 ############################################################
 
-def va_graph(input_image, in_channel, batch_size):
+class VA_Module(KL.Layer):
     """Build a Volumetric-Attention graph.
         input_image: [b(64), h, w, c]
     """
-    batch, h, w, c = input_image.shape
+    def __init__(self, in_channel, batch_size, name):
+        super(VA_Module, self).__init__(name=name)
+        self.in_channel = in_channel
+        self.batch_size = batch_size
 
-    for b in range(batch_size):
-        if b==0:
-            feature = input_image[b:b+3]
-        elif b==(batch-1):
-            feature = input_image[b-3:b]
-        else:
-            feature = input_image[b-1:b+2]
+        self.channel_attention = channel_attention(in_channel,  self.name + "_ca_")
+        self.spatial_attention = spatial_attention(self.name + "_sa_")
 
-        ca = channel_attention(input_image[b:b + 1], feature, in_channel, str(b)+"_ca_")
-        sa = spatial_attention(input_image[b:b + 1], feature, str(b)+"_sa_")
+    def call(self, input_image):
+        batch, h, w, c = input_image.shape
 
-        ca_mul = KL.Multiply()([input_image[b:b + 1], ca])
-        sa_mul = KL.Multiply()([ca_mul, sa])
-        if b==0:
-            output = sa_mul
-        else:
-            output = KL.Concatenate(axis=0)([output, sa_mul])
+        for b in range(self.batch_size):
+            if b == 0:
+                feature = input_image[b:b + 3]
+            elif b == (batch - 1):
+                feature = input_image[b - 3:b]
+            else:
+                feature = input_image[b - 1:b + 2]
 
-    return output
+            ca = self.channel_attention([input_image[b:b + 1], feature])
+            sa = self.spatial_attention([input_image[b:b + 1], feature])
 
-def channel_attention(input_image, feature, in_channel, name, feature_bag=3, reduction_ratio=16):
-    """Build a Volumetric-Attention graph.
-        input_image: [1, h, w, c]
-        feature: [3, h, w, c]
-    """
-    x = spatial_pool(input_image)
-    x = KL.Conv2D(in_channel//reduction_ratio, (1, 1), strides=1, padding="same",
-                  name=name+'conv1_1', use_bias=True)(x)
-    x = BatchNorm(name=name+'bn1_1')(x, training=True)
-    x = KL.Activation('relu')(x)
-    x = KL.Conv2D(in_channel, (1, 1), strides=1, padding="same",
-                  name=name+'conv1_2', use_bias=True)(x)
-    x = BatchNorm(name=name+'bn1_2')(x, training=True)
-    x = KL.Activation('relu')(x) # [1, 1, 1, c]
+            ca_mul = KL.Multiply()([input_image[b:b + 1], ca])
+            sa_mul = KL.Multiply()([ca_mul, sa])
+            if b == 0:
+                output = sa_mul
+            else:
+                output = KL.Concatenate(axis=0)([output, sa_mul])
+        return output
 
-    f = K.expand_dims(feature, axis=0)
-    f = KL.Permute((2, 3, 4, 1))(f)
-    f = KL.Reshape((f.shape[1], f.shape[2], -1))(f)
-    f = spatial_pool(f) # [1, 1, 1, feature_bag*c]
+class channel_attention(KL.Layer):
+    def __init__(self, in_channel, name):
+        super(channel_attention, self).__init__(name=name)
+        self.in_channel = in_channel
+        self.feature_bag = 3
+        self.reduction_ratio = 16
 
-    f1 = KL.Conv2D(in_channel * feature_bag // reduction_ratio, (1, 1), strides=1, padding="same",
-                  name=name+'conv2_1', use_bias=True)(f)
-    f1 = BatchNorm(name=name+'bn2_1')(f1, training=True)
-    f1 = KL.Activation('relu')(f1)
-    f1 = KL.Conv2D(in_channel * feature_bag, (1, 1), strides=1, padding="same",
-                  name=name+'conv2_2', use_bias=True)(f1)
-    f1 = BatchNorm(name=name+'bn2_2')(f1, training=True)
-    f1 = KL.Activation('relu')(f1)
+        self.c1_1 = KL.Conv2D(self.in_channel // self.reduction_ratio, (1, 1), strides=1, padding="same",
+                      name=name + 'conv1_1', use_bias=True)
+        self.bn1_1 = BatchNorm(name=name + 'bn1_1')
+        self.c1_2 = KL.Conv2D(self.in_channel, (1, 1), strides=1, padding="same",
+                      name=name + 'conv1_2', use_bias=True)
+        self.bn1_2 = BatchNorm(name=name + 'bn1_2')
 
-    f2 = KL.Conv2D(in_channel * feature_bag // reduction_ratio, (1, 1), strides=1, padding="same",
-                   name=name+'conv3_1', use_bias=True)(f)
-    f2 = BatchNorm(name=name+'bn3_1')(f2, training=True)
-    f2 = KL.Activation('relu')(f2)
-    f2 = KL.Conv2D(in_channel * 3, (1, 1), strides=1, padding="same",
-                   name=name+'conv3_2', use_bias=True)(f2)
-    f2 = BatchNorm(name=name+'bn3_2')(f2, training=True)
-    f2 = KL.Activation('relu')(f2)
+        self.c2_1 = KL.Conv2D(self.in_channel * self.feature_bag // self.reduction_ratio, (1, 1), strides=1, padding="same",
+                       name=name + 'conv2_1', use_bias=True)
+        self.bn2_1 = BatchNorm(name=name + 'bn2_1')
+        self.c2_2 = KL.Conv2D(self.in_channel * self.feature_bag, (1, 1), strides=1, padding="same",
+                       name=name + 'conv2_2', use_bias=True)
+        self.bn2_2 = BatchNorm(name=name + 'bn2_2')
 
-    x = KL.Reshape((1, -1))(x)
-    f1 = KL.Reshape((-1, feature_bag))(f1)
-    x_f1 = K.dot(x, f1)
-    x_f1 = KL.Reshape((1, -1))(x_f1)
-    x_f1 = KL.Activation("softmax")(x_f1)
+        self.c3_1 = KL.Conv2D(self.in_channel * self.feature_bag // self.reduction_ratio, (1, 1), strides=1, padding="same",
+                       name=name + 'conv3_1', use_bias=True)
+        self.bn3_1 = BatchNorm(name=name + 'bn3_1')
+        self.c3_2 = KL.Conv2D(self.in_channel * 3, (1, 1), strides=1, padding="same",
+                       name=name + 'conv3_2', use_bias=True)
+        self.bn3_2 = BatchNorm(name=name + 'bn3_2')
 
-    f2 = KL.Reshape((feature_bag, -1))(f2)
-    x_f1_f2 = K.dot(x_f1, f2)
+        self.c_4 = KL.Conv2D(self.in_channel, (1, 1), strides=1, padding="same",
+                  name=name + 'conv4', use_bias=True)
 
-    out = KL.Activation('relu')(x_f1_f2)
-    out = KL.Conv2D(in_channel, (1, 1), strides=1, padding="same",
-                   name=name+'conv4', use_bias=True)(out)
-    out = KL.Activation('sigmoid')(out)
+    def call(self, inputs):
+        """Build a Volumetric-Attention graph.
+            input_image: [1, h, w, c]
+            feature: [3, h, w, c]
+        """
+        input_image = inputs[0]
+        feature = inputs[1]
 
-    return out
+        x = spatial_pool(input_image)
+        x = self.c1_1(x)
+        x = self.bn1_1(x, training=False)
+        x = KL.Activation('relu')(x)
+        x = self.c1_2(x)
+        x = self.bn1_2(x, training=False)
+        x = KL.Activation('relu')(x)  # [1, 1, 1, c]
 
-def spatial_attention(input_image, feature, name, feature_bag=3):
-    """Build a Volumetric-Attention graph.
-        input_image: [1, h, w, c]
-        feature: [3, h, w, c]
-    """
-    _, h, w, c = input_image.shape
+        f = K.expand_dims(feature, axis=0)
+        f = KL.Permute((2, 3, 4, 1))(f)
+        f = KL.Reshape((f.shape[1], f.shape[2], -1))(f)
+        f = spatial_pool(f)  # [1, 1, 1, feature_bag*c]
 
-    x = channel_pool(input_image)
-    x = KL.Conv2D(2, (1, 1), strides=1, padding="same",
-                  name=name+'conv1_1', use_bias=True)(x)
-    x = BatchNorm(name=name+'bn1_1')(x, training=True)
-    x = KL.Activation('relu')(x) # [1, h, w, 2]
+        f1 = self.c2_1(f)
+        f1 = self.bn2_1(f1, training=False)
+        f1 = KL.Activation('relu')(f1)
+        f1 = self.c2_2(f1)
+        f1 = self.bn2_2(f1, training=False)
+        f1 = KL.Activation('relu')(f1)
 
-    f = channel_pool(feature)
-    f = K.expand_dims(f, axis=0)
-    f = KL.Permute((2, 3, 4, 1))(f)
-    f = KL.Reshape((h, w, -1))(f)
+        f2 = self.c3_1(f)
+        f2 = self.bn3_1(f2, training=False)
+        f2 = KL.Activation('relu')(f2)
+        f2 = self.c3_2(f2)
+        f2 = self.bn3_2(f2, training=False)
+        f2 = KL.Activation('relu')(f2)
 
-    f1 = KL.Conv2D(2 * feature_bag, (1, 1), strides=1, padding="same",
-                  name=name+'conv2_1', use_bias=True)(f)
-    f1 = BatchNorm(name=name+'bn2_1')(f1, training=True)
-    f1 = KL.Activation('relu')(f1)
+        x = KL.Reshape((1, -1))(x)
+        f1 = KL.Reshape((-1, self.feature_bag))(f1)
+        x_f1 = K.dot(x, f1)
+        x_f1 = KL.Reshape((1, -1))(x_f1)
+        x_f1 = KL.Activation("softmax")(x_f1)
 
-    f2 = KL.Conv2D(2 * feature_bag, (1, 1), strides=1, padding="same",
-                  name=name+'conv2_2', use_bias=True)(f)
-    f2 = BatchNorm(name=name+'bn2_2')(f2, training=True)
-    f2 = KL.Activation('relu')(f2)
+        f2 = KL.Reshape((self.feature_bag, -1))(f2)
+        x_f1_f2 = K.dot(x_f1, f2)
 
-    x = KL.Reshape((-1, 2))(x)
-    f1 = KL.Reshape((feature_bag * 2, -1))(f1)
-    x_f1 = K.dot(f1, x)
-    x_f1 = KL.Reshape((-1, 2))(x_f1)
-    x_f1 = KL.Activation("softmax")(x_f1) # [feature_bag * 2, 2]
+        out = KL.Activation('relu')(x_f1_f2)
+        out = self.c_4(out)
+        out = KL.Activation('sigmoid')(out)
 
-    f2 = KL.Reshape((-1, feature_bag * 2))(f2)
-    x_f1_f2 = K.dot(f2, x_f1)
-    x_f1_f2 = KL.Reshape((h, w, -1))(x_f1_f2)
+        return out
 
-    out = KL.Activation('relu')(x_f1_f2)
-    out = KL.Conv2D(1, (1, 1), strides=1, padding="same",
-                   name=name+'conv3', use_bias=True)(out)
-    out = KL.Activation('sigmoid')(out)
+class spatial_attention(KL.Layer):
+    def __init__(self, name):
+        super(spatial_attention, self).__init__(name=name)
+        self.feature_bag = 3
+        self.c1_1 = KL.Conv2D(2, (1, 1), strides=1, padding="same",
+                      name=name + 'conv1_1', use_bias=True)
+        self.bn1_1 = BatchNorm(name=name + 'bn1_1')
 
-    return out
+        self.c2_1 = KL.Conv2D(2 * self.feature_bag, (1, 1), strides=1, padding="same",
+                       name=name + 'conv2_1', use_bias=True)
+        self.bn2_1 = BatchNorm(name=name + 'bn2_1')
+
+        self.c2_2 = KL.Conv2D(2 * self.feature_bag, (1, 1), strides=1, padding="same",
+                       name=name + 'conv2_2', use_bias=True)
+        self.bn2_2 = BatchNorm(name=name + 'bn2_2')
+
+        self.c3 = KL.Conv2D(1, (1, 1), strides=1, padding="same",
+                        name=name + 'conv3', use_bias=True)
+
+    def call(self, inputs):
+        """Build a Volumetric-Attention graph.
+               input_image: [1, h, w, c]
+               feature: [3, h, w, c]
+           """
+        input_image = inputs[0]
+        feature = inputs[1]
+        _, h, w, c = input_image.shape
+
+        x = channel_pool(input_image)
+        x = self.c1_1(x)
+        x = self.bn1_1(x, training=False)
+        x = KL.Activation('relu')(x)  # [1, h, w, 2]
+
+        f = channel_pool(feature)
+        f = K.expand_dims(f, axis=0)
+        f = KL.Permute((2, 3, 4, 1))(f)
+        f = KL.Reshape((h, w, -1))(f)
+
+        f1 = self.c2_1(f)
+        f1 = self.bn2_1(f1, training=False)
+        f1 = KL.Activation('relu')(f1)
+
+        f2 = self.c2_2(f)
+        f2 = self.bn2_2(f2, training=False)
+        f2 = KL.Activation('relu')(f2)
+
+        x = KL.Reshape((-1, 2))(x)
+        f1 = KL.Reshape((self.feature_bag * 2, -1))(f1)
+        x_f1 = K.dot(f1, x)
+        x_f1 = KL.Reshape((-1, 2))(x_f1)
+        x_f1 = KL.Activation("softmax")(x_f1)  # [feature_bag * 2, 2]
+
+        f2 = KL.Reshape((-1, self.feature_bag * 2))(f2)
+        x_f1_f2 = K.dot(f2, x_f1)
+        x_f1_f2 = KL.Reshape((h, w, -1))(x_f1_f2)
+
+        out = KL.Activation('relu')(x_f1_f2)
+        out = self.c3(out)
+        out = KL.Activation('sigmoid')(out)
+
+        return out
 
 def spatial_pool(input_image):
     out = KL.GlobalAveragePooling2D()(input_image)
@@ -2026,10 +2078,15 @@ class MaskRCNN(object):
         # subsampling from P5 with stride of 2.
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
 
-        #P2 = va_graph(P2, 256, config.BATCH_SIZE)
-        #P3 = va_graph(P3, 256, config.BATCH_SIZE)
-        #P4 = va_graph(P4, 256, config.BATCH_SIZE)
-        #P5 = va_graph(P5, 256, config.BATCH_SIZE)
+        #P2 = VA_Module(256, config.BATCH_SIZE, "P2")(P2)
+        #P3 = VA_Module(256, config.BATCH_SIZE, "P3")(P3)
+        #P4 = VA_Module(256, config.BATCH_SIZE, "P4")(P4)
+        #P5 = VA_Module(256, config.BATCH_SIZE, "P5")(P5)
+
+        #P2 = va_graph(P2, 256, config.BATCH_SIZE, "P2")
+        #P3 = va_graph(P3, 256, config.BATCH_SIZE, "P3")
+        #P4 = va_graph(P4, 256, config.BATCH_SIZE, "P4")
+        #P5 = va_graph(P5, 256, config.BATCH_SIZE, "P5")
 
         # Note that P6 is used in RPN, but not in the classifier heads.
         rpn_feature_maps = [P2, P3, P4, P5, P6]
@@ -2328,7 +2385,7 @@ class MaskRCNN(object):
         layers = keras_model.inner_model.layers if hasattr(keras_model, "inner_model")\
             else keras_model.layers
 
-        for layer in layers:
+        for layer in keras_model.layers:
             # Is the layer a model?
             if layer.__class__.__name__ == 'Model':
                 print("In model: ", layer.name)

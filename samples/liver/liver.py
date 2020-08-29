@@ -35,7 +35,7 @@ import skimage.draw
 import scipy.ndimage as ni
 
 # Root directory of the project
-ROOT_DIR = os.path.abspath("C:/Users/CGIP/Desktop/github/Mask_RCNN")
+ROOT_DIR = os.path.abspath("C:/Users/cglab/Desktop/Mask_RCNN/")
 
 # Import Mask RCNN
 sys.path.append(ROOT_DIR)  # To find local version of the library
@@ -301,23 +301,23 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', required=False,
                         metavar="/path/to/balloon/dataset/",
                         help='Directory of the Balloon dataset',
-                        default="E:/CENet-SR-AutoNet/database/nfold_90/")
+                        default="D:/chungmy/PyTorch/CENet-SR-AutoNet/database/nfold_90")
     parser.add_argument('--testdataset', required=False,
                         metavar="/path/to/balloon/dataset/",
                         help='Directory of the Balloon dataset',
-                        default="E:\CENet-SR-AutoNet\database/nfold_test_80")
+                        default="D:/chungmy/PyTorch/CENet-SR-AutoNet/database/nfold_test_80")
     parser.add_argument('--weights', required=True,
                         metavar="/path/to/weights.h5",
                         help="Path to weights .h5 file or 'coco'")
     parser.add_argument('--logs', required=False,
-                        default="E:\CENet-SR-AutoNet\log",
+                        default="C:/Users/cglab/Desktop/Mask_RCNN/results",
                         metavar="/path/to/logs/",
                         help='Logs and checkpoints directory (default=logs/)')
     parser.add_argument('--image', required=False,
                         metavar="path or URL to image",
                         help='Image to apply the color splash effect on')
     parser.add_argument('--results', required=False,
-                        default="E:\CENet-SR-AutoNet\\results",
+                        default="C:/Users/cglab/Desktop/Mask_RCNN/results",
                         metavar="/path/to/logs/",
                         help='Logs and checkpoints directory (default=results/)')
     args = parser.parse_args()
