@@ -2078,10 +2078,10 @@ class MaskRCNN(object):
         # subsampling from P5 with stride of 2.
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
 
-        #P2 = VA_Module(256, config.BATCH_SIZE, "P2")(P2)
-        #P3 = VA_Module(256, config.BATCH_SIZE, "P3")(P3)
-        #P4 = VA_Module(256, config.BATCH_SIZE, "P4")(P4)
-        #P5 = VA_Module(256, config.BATCH_SIZE, "P5")(P5)
+        P2 = VA_Module(256, config.BATCH_SIZE, "P2")(P2)
+        P3 = VA_Module(256, config.BATCH_SIZE, "P3")(P3)
+        P4 = VA_Module(256, config.BATCH_SIZE, "P4")(P4)
+        P5 = VA_Module(256, config.BATCH_SIZE, "P5")(P5)
 
         #P2 = va_graph(P2, 256, config.BATCH_SIZE, "P2")
         #P3 = va_graph(P3, 256, config.BATCH_SIZE, "P3")
