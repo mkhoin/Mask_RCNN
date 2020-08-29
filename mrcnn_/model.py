@@ -22,7 +22,7 @@ import tensorflow.keras.utils as KU
 from tensorflow.python.eager import context
 import tensorflow.keras.models as KM
 
-from mrcnn import utils
+from mrcnn_ import utils
 
 # Requires TensorFlow 2.0+
 from distutils.version import LooseVersion
@@ -88,13 +88,13 @@ def compute_backbone_shapes(config, image_shape):
 #  VAModule
 ############################################################
 
-def va_graph(input_image, in_channel):
+def va_graph(input_image, in_channel, batch_size):
     """Build a Volumetric-Attention graph.
         input_image: [b(64), h, w, c]
     """
     batch, h, w, c = input_image.shape
 
-    for b in range(batch):
+    for b in range(batch_size):
         if b==0:
             feature = input_image[b:b+3]
         elif b==(batch-1):
@@ -1261,7 +1261,7 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
     pred_class_ids = tf.argmax(input=pred_class_logits, axis=2)
     # TODO: Update this line to work with batch > 1. Right now it assumes all
     #       images in a batch have the same active_class_ids
-    pred_active = tf.gather(active_class_ids[0], pred_class_ids)
+    #pred_active = tf.gather(active_class_ids[0], pred_class_ids)
 
     # Loss
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -1269,11 +1269,11 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
 
     # Erase losses of predictions of classes that are not in the active
     # classes of the image.
-    loss = loss * pred_active
+    #loss = loss * pred_active
 
     # Computer loss mean. Use only predictions that contribute
     # to the loss to get a correct mean.
-    loss = tf.reduce_sum(input_tensor=loss) / tf.reduce_sum(input_tensor=pred_active)
+    loss = tf.reduce_sum(input_tensor=loss) #/ tf.reduce_sum(input_tensor=pred_active)
     return loss
 
 
@@ -1803,7 +1803,6 @@ class DataGenerator(KU.Sequence):
         self.augmentation = augmentation
         self.random_rois = random_rois
         self.batch_size = self.config.BATCH_SIZE
-        self.depth = self.config.DEPTH
         self.detection_targets = detection_targets
 
     def __len__(self):
@@ -1818,7 +1817,7 @@ class DataGenerator(KU.Sequence):
         masks, class_ids = self.dataset.load_mask(image_id)
 
         init = False
-        for b in range(self.depth):
+        for b in range(self.batch_size):
             image, image_meta, gt_class_ids, gt_boxes, gt_masks = \
                 load_image_gt(self.dataset, self.config, image_id,
                               image=images[b], mask=masks[b], class_ids=class_ids[b],
@@ -1846,32 +1845,32 @@ class DataGenerator(KU.Sequence):
             # Init batch arrays
             if not init:
                 batch_image_meta = np.zeros(
-                    (self.depth,) + image_meta.shape, dtype=image_meta.dtype)
+                    (self.batch_size,) + image_meta.shape, dtype=image_meta.dtype)
                 batch_rpn_match = np.zeros(
-                    [self.depth, self.anchors.shape[0], 1], dtype=rpn_match.dtype)
+                    [self.batch_size, self.anchors.shape[0], 1], dtype=rpn_match.dtype)
                 batch_rpn_bbox = np.zeros(
-                    [self.depth, self.config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=rpn_bbox.dtype)
+                    [self.batch_size, self.config.RPN_TRAIN_ANCHORS_PER_IMAGE, 4], dtype=rpn_bbox.dtype)
                 batch_images = np.zeros(
-                    (self.depth,) + image.shape, dtype=np.float32)
+                    (self.batch_size,) + image.shape, dtype=np.float32)
                 batch_gt_class_ids = np.zeros(
-                    (self.depth, self.config.MAX_GT_INSTANCES), dtype=np.int32)
+                    (self.batch_size, self.config.MAX_GT_INSTANCES), dtype=np.int32)
                 batch_gt_boxes = np.zeros(
-                    (self.depth, self.config.MAX_GT_INSTANCES, 4), dtype=np.int32)
+                    (self.batch_size, self.config.MAX_GT_INSTANCES, 4), dtype=np.int32)
                 batch_gt_masks = np.zeros(
-                    (self.depth, gt_masks.shape[0], gt_masks.shape[1],
+                    (self.batch_size, gt_masks.shape[0], gt_masks.shape[1],
                      self.config.MAX_GT_INSTANCES), dtype=gt_masks.dtype)
                 if self.random_rois:
                     batch_rpn_rois = np.zeros(
-                        (self.depth, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
+                        (self.batch_size, rpn_rois.shape[0], 4), dtype=rpn_rois.dtype)
                     if self.detection_targets:
                         batch_rois = np.zeros(
-                            (self.depth,) + rois.shape, dtype=rois.dtype)
+                            (self.batch_size,) + rois.shape, dtype=rois.dtype)
                         batch_mrcnn_class_ids = np.zeros(
-                            (self.depth,) + mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
+                            (self.batch_size,) + mrcnn_class_ids.shape, dtype=mrcnn_class_ids.dtype)
                         batch_mrcnn_bbox = np.zeros(
-                            (self.depth,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
+                            (self.batch_size,) + mrcnn_bbox.shape, dtype=mrcnn_bbox.dtype)
                         batch_mrcnn_mask = np.zeros(
-                            (self.depth,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
+                            (self.batch_size,) + mrcnn_mask.shape, dtype=mrcnn_mask.dtype)
                 init = True
 
             # If more instances than fits in the array, sub-sample from them.
@@ -1886,7 +1885,7 @@ class DataGenerator(KU.Sequence):
             batch_image_meta[b] = image_meta
             batch_rpn_match[b] = rpn_match[:, np.newaxis]
             batch_rpn_bbox[b] = rpn_bbox
-            batch_images[b] = mold_image(image.astype(np.float32), self.config)
+            batch_images[b] = image.astype(np.float32)
             batch_gt_class_ids[b, :gt_class_ids.shape[0]] = gt_class_ids
             batch_gt_boxes[b, :gt_boxes.shape[0]] = gt_boxes
             batch_gt_masks[b, :, :, :gt_masks.shape[-1]] = gt_masks
@@ -1905,6 +1904,7 @@ class DataGenerator(KU.Sequence):
 
         #print(batch_images.shape, batch_image_meta.shape, batch_rpn_match.shape, batch_rpn_bbox.shape,
         #      batch_gt_class_ids.shape, batch_gt_boxes.shape, batch_gt_masks.shape)
+        # (64, 128, 128, 3) (64, 14) (64, 4092, 1) (64, 10, 4) (64, 1) (64, 1, 4) (64, 56, 56, 1)
 
         if self.random_rois:
             inputs.extend([batch_rpn_rois])
@@ -1959,7 +1959,7 @@ class MaskRCNN(object):
 
         # Inputs
         input_image = KL.Input(
-            shape=[None, None, config.IMAGE_SHAPE[2]], name="input_image")
+            shape=[config.IMAGE_SHAPE[0], config.IMAGE_SHAPE[1], config.IMAGE_SHAPE[2]], batch_size=config.BATCH_SIZE, name="input_image")
         input_image_meta = KL.Input(shape=[config.IMAGE_META_SIZE],
                                     name="input_image_meta")
         if mode == "training":
@@ -2025,6 +2025,11 @@ class MaskRCNN(object):
         # P6 is used for the 5th anchor scale in RPN. Generated by
         # subsampling from P5 with stride of 2.
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
+
+        #P2 = va_graph(P2, 256, config.BATCH_SIZE)
+        #P3 = va_graph(P3, 256, config.BATCH_SIZE)
+        #P4 = va_graph(P4, 256, config.BATCH_SIZE)
+        #P5 = va_graph(P5, 256, config.BATCH_SIZE)
 
         # Note that P6 is used in RPN, but not in the classifier heads.
         rpn_feature_maps = [P2, P3, P4, P5, P6]
@@ -2121,8 +2126,11 @@ class MaskRCNN(object):
             # TODO: clean up (use tf.identify if necessary)
             output_rois = KL.Lambda(lambda x: x * 1, name="output_rois")(rois)
 
-            print(input_rpn_match.shape, rpn_class_logits.shape, input_rpn_bbox.shape, rpn_bbox.shape,
-                  target_class_ids.shape, mrcnn_class_logits.shape, active_class_ids.shape)
+            #print(input_rpn_match.shape, rpn_class_logits.shape, input_rpn_bbox.shape, rpn_bbox.shape,
+            #      target_class_ids.shape, mrcnn_class_logits.shape, active_class_ids.shape)
+            #(None, None, 1) (None, None, 2) (None, None, 4) (None, None, 4) (64, None) (None, None, 2) (None, 2)
+
+            tf.debugging.assert_all_finite(mrcnn_class_logits, "mrcnn_class_logits")
 
             # Losses
             rpn_class_loss = KL.Lambda(lambda x: rpn_class_loss_graph(*x), name="rpn_class_loss")(
@@ -2265,9 +2273,7 @@ class MaskRCNN(object):
         metrics. Then calls the Keras compile() function.
         """
         # Optimizer object
-        optimizer = keras.optimizers.SGD(
-            lr=learning_rate, momentum=momentum,
-            clipnorm=self.config.GRADIENT_CLIP_NORM)
+        optimizer = keras.optimizers.Adam(lr=learning_rate)
         # Add Losses
         loss_names = [
             "rpn_class_loss",  "rpn_bbox_loss",
@@ -2600,51 +2606,50 @@ class MaskRCNN(object):
         masks: [H, W, N] instance binary masks
         """
         assert self.mode == "inference", "Create model in inference mode."
-        assert len(
-            images) == self.config.BATCH_SIZE, "len(images) must be equal to BATCH_SIZE"
 
-        if verbose:
-            log("Processing {} images".format(len(images)))
-            for image in images:
-                log("image", image)
-
-        # Mold inputs to format expected by the neural network
-        molded_images, image_metas, windows = self.mold_inputs(images)
-
-        # Validate image sizes
-        # All images in a batch MUST be of the same size
-        image_shape = molded_images[0].shape
-        for g in molded_images[1:]:
-            assert g.shape == image_shape,\
-                "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
-
-        # Anchors
-        anchors = self.get_anchors(image_shape)
-        # Duplicate across the batch dimension because Keras requires it
-        # TODO: can this be optimized to avoid duplicating the anchors?
-        anchors = np.broadcast_to(anchors, (self.config.BATCH_SIZE,) + anchors.shape)
-
-        if verbose:
-            log("molded_images", molded_images)
-            log("image_metas", image_metas)
-            log("anchors", anchors)
-        # Run object detection
-        detections, _, _, mrcnn_mask, _, _, _ =\
-            self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
-        # Process detections
         results = []
-        for i, image in enumerate(images):
+        masks = []
+        for i in range(images.shape[0]):
+            # Mold inputs to format expected by the neural network
+            molded_images, image_metas, windows = self.mold_inputs(images[i:i+1])
+
+            # Validate image sizes
+            # All images in a batch MUST be of the same size
+            image_shape = molded_images[0].shape
+            for g in molded_images[1:]:
+                assert g.shape == image_shape,\
+                    "After resizing, all images must have the same size. Check IMAGE_RESIZE_MODE and image sizes."
+
+            # Anchors
+            anchors = self.get_anchors(image_shape)
+            # Duplicate across the batch dimension because Keras requires it
+            # TODO: can this be optimized to avoid duplicating the anchors?
+            anchors = np.broadcast_to(anchors, (1,) + anchors.shape)
+
+            if verbose:
+                log("molded_images", molded_images)
+                log("image_metas", image_metas)
+                log("anchors", anchors)
+            # Run object detection
+            detections, _, _, mrcnn_mask, _, _, _ =\
+                self.keras_model.predict([molded_images, image_metas, anchors], verbose=0)
+
+            print(detections.shape, mrcnn_mask.shape, molded_images.shape)
+            # Process detections
             final_rois, final_class_ids, final_scores, final_masks =\
-                self.unmold_detections(detections[i], mrcnn_mask[i],
-                                       image.shape, molded_images[i].shape,
-                                       windows[i])
+                self.unmold_detections(detections[0], mrcnn_mask[0],
+                                        images[i].shape, molded_images[0].shape,
+                                        windows[0])
             results.append({
                 "rois": final_rois,
                 "class_ids": final_class_ids,
                 "scores": final_scores,
                 "masks": final_masks,
             })
-        return results
+            masks.append(final_masks)
+            print(final_masks.shape)
+
+        return np.array(masks)
 
     def detect_molded(self, molded_images, image_metas, verbose=0):
         """Runs the detection pipeline, but expect inputs that are

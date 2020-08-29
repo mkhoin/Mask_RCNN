@@ -419,7 +419,6 @@ def resize_image(image, min_dim=None, max_dim=None, min_scale=None, mode="square
     padding: Padding added to the image [(top, bottom), (left, right), (0, 0)]
     """
     # Keep track of image dtype and return results in the same dtype
-    image_dtype = image.dtype
     # Default window (y1, x1, y2, x2) and default scale == 1.
     h, w = image.shape[:2]
     window = (0, 0, h, w)
@@ -442,14 +441,6 @@ def resize_mask(mask, scale, padding, crop=None):
     """
     # Suppress warning from scipy 0.13.0, the output shape of zoom() is
     # calculated with round() instead of int()
-    with warnings.catch_warnings():
-        warnings.simplefilter("ignore")
-        mask = scipy.ndimage.zoom(mask, zoom=[scale, scale, 1], order=0)
-    if crop is not None:
-        y, x, h, w = crop
-        mask = mask[y:y + h, x:x + w]
-    else:
-        mask = np.pad(mask, padding, mode='constant', constant_values=0)
     return mask
 
 

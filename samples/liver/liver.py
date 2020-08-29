@@ -79,7 +79,7 @@ class LiverConfig(Config):
     DETECTION_MIN_CONFIDENCE = 0.9
 
     BACKBONE_STRIDES  = [4, 8, 16, 32, 64]
-    RPN_ANCHOR_SCALES = (4, 8, 16, 32, 64)
+    RPN_ANCHOR_SCALES = (2, 4, 8, 16, 32)
     RPN_TRAIN_ANCHORS_PER_IMAGE = 10
 
     # ROIs kept after tf.nn.top_k and before non-maximum suppression
@@ -94,10 +94,19 @@ class LiverConfig(Config):
     IMAGE_MAX_DIM = 128
 
     TRAIN_ROIS_PER_IMAGE = 20
-    BATCH_SIZE = 64
-    DEPTH = 64
 
-    LEARNING_RATE = 0.0001
+    LEARNING_RATE = 0.001
+    MAX_GT_INSTANCES = 1
+
+    DETECTION_MAX_INSTANCES = 1
+
+    LOSS_WEIGHTS = {
+        "rpn_class_loss": 1.,
+        "rpn_bbox_loss": 1.,
+        "mrcnn_class_loss": 1e-2,
+        "mrcnn_bbox_loss": 1.,
+        "mrcnn_mask_loss": 10
+    }
 
 
 ############################################################
@@ -115,7 +124,7 @@ class LiverDataset(utils.Dataset):
         self.add_class("liver", 1, "liver")
 
         # Train or validation dataset?
-        assert subset in ["train", "val"]
+        assert subset in ["train", "val", "test"]
 
         self.width = 128
         self.height = 128
@@ -137,12 +146,14 @@ class LiverDataset(utils.Dataset):
                 aug = None
                 mat = None
 
+            image = iu.load_raw_image(image_path)
+
             self.add_image(
                 "liver",
                 image_id=image_path,  # use file name as a unique image id
                 path=image_path,
-                width=self.width, height=self.height,
-                depth=self.depth,
+                width=image.shape[2], height=image.shape[1],
+                depth=image.shape[0],
                 aug=aug, mat=mat,
                 label_path=label_path)
 
@@ -171,8 +182,7 @@ class LiverDataset(utils.Dataset):
 
         label = np.expand_dims(label, axis=3)
 
-        class_ids = iu.get_class_ids(label)
-        class_ids = class_ids.reshape(-1, 1).astype(np.int32)
+        class_ids = np.ones(shape=(label.shape[0], 1)).astype(np.int32)
 
         # Return mask, and array of class IDs of each instance. Since we have
         # one class ID only, we return an array of 1s
@@ -193,6 +203,7 @@ class LiverDataset(utils.Dataset):
         # Convert polygons to a bitmap mask of shape
         # [height, width, 3] => [height, width, depth]
         image = iu.load_raw_image(info["path"])
+
         image = iu.resize_image(image, False, [self.depth, self.height, self.width])
 
         if info["aug"] is not None:
@@ -251,46 +262,28 @@ def train(model):
     print("Training network heads")
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
-                epochs=30,
+                epochs=150,
                 layers='heads')
 
 
-def color_splash(image, mask):
-    """Apply color splash effect.
-    image: RGB image [height, width, 3]
-    mask: instance segmentation mask [height, width, instance count]
+def test(model, dst_path):
+    dataset_test = LiverDataset()
+    dataset_test.load_liver(os.path.join(args.testdataset, "image"),
+                            os.path.join(args.testdataset, "label"),
+                            "test")
+    dataset_test.prepare()
 
-    Returns result image.
-    """
-    # Make a grayscale copy of the image. The grayscale copy still
-    # has 3 RGB channels, though.
-    gray = skimage.color.gray2rgb(skimage.color.rgb2gray(image)) * 255
-    # Copy color pixels from the original color image where mask is set
-    if mask.shape[-1] > 0:
-        # We're treating all instances as one, so collapse the mask into one layer
-        mask = (np.sum(mask, -1, keepdims=True) >= 1)
-        splash = np.where(mask, image, gray).astype(np.uint8)
-    else:
-        splash = gray.astype(np.uint8)
-    return splash
+    image_ids = dataset_test.image_ids
 
+    for image_id in image_ids:
+        info = dataset_test.image_info[image_id]
+        print("Processing {} images".format(info["path"].split("\\")[-1]))
 
-def detect_and_color_splash(model, image_path=None):
-    assert image_path
+        image = dataset_test.load_image(image_id)
+        out_label = model.detect(image, verbose=1)
 
-    # Image or video?
-    if image_path:
-        # Run model detection and generate the color splash effect
-        print("Running on {}".format(args.image))
-        # Read image
-        image = skimage.io.imread(args.image)
-        # Detect objects
-        r = model.detect([image], verbose=1)[0]
-        # Color splash
-        splash = color_splash(image, r['masks'])
-        # Save output
-        file_name = "splash_{:%Y%m%dT%H%M%S}.png".format(datetime.datetime.now())
-        skimage.io.imsave(file_name, splash)
+        out_label = iu.resize_image(out_label, True, (info["depth"], info["height"], info["width"]))
+        iu.write_raw(out_label, os.path.join(dst_path, '%s' % info["path"].split("\\")[-1]))
 
 ############################################################
 #  Training
@@ -304,11 +297,15 @@ if __name__ == '__main__':
         description='Train Mask R-CNN to detect balloons.')
     parser.add_argument("command",
                         metavar="<command>",
-                        help="'train' or 'splash'")
+                        help="'train' or 'test'")
     parser.add_argument('--dataset', required=False,
                         metavar="/path/to/balloon/dataset/",
                         help='Directory of the Balloon dataset',
-                        default="E:/CENet-SR-AutoNet/database/nfold_10/")
+                        default="E:/CENet-SR-AutoNet/database/nfold_90/")
+    parser.add_argument('--testdataset', required=False,
+                        metavar="/path/to/balloon/dataset/",
+                        help='Directory of the Balloon dataset',
+                        default="E:\CENet-SR-AutoNet\database/nfold_test_80")
     parser.add_argument('--weights', required=True,
                         metavar="/path/to/weights.h5",
                         help="Path to weights .h5 file or 'coco'")
@@ -319,14 +316,17 @@ if __name__ == '__main__':
     parser.add_argument('--image', required=False,
                         metavar="path or URL to image",
                         help='Image to apply the color splash effect on')
+    parser.add_argument('--results', required=False,
+                        default="E:\CENet-SR-AutoNet\\results",
+                        metavar="/path/to/logs/",
+                        help='Logs and checkpoints directory (default=results/)')
     args = parser.parse_args()
 
     # Validate arguments
     if args.command == "train":
         assert args.dataset, "Argument --dataset is required for training"
-    elif args.command == "splash":
-        assert args.image,\
-               "Provide --image or --video to apply color splash"
+    elif args.command == "test":
+        assert args.testdataset, "Argument --testdataset is required for training"
 
     print("Weights: ", args.weights)
     print("Dataset: ", args.dataset)
@@ -381,8 +381,8 @@ if __name__ == '__main__':
     # Train or evaluate
     if args.command == "train":
         train(model)
-    elif args.command == "splash":
-        detect_and_color_splash(model, image_path=args.image)
+    elif args.command == "test":
+        test(model, dst_path=args.results)
     else:
         print("'{}' is not recognized. "
               "Use 'train' or 'splash'".format(args.command))

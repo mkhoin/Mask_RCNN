@@ -45,7 +45,7 @@ class Config(object):
     # Number of validation steps to run at the end of every training epoch.
     # A bigger number improves accuracy of validation stats, but slows
     # down the training.
-    VALIDATION_STEPS = 50
+    VALIDATION_STEPS = 10
 
     # Backbone network architecture
     # Supported values are: resnet50, resnet101.
@@ -205,7 +205,7 @@ class Config(object):
     #     None: Train BN layers. This is the normal mode
     #     False: Freeze BN layers. Good when using a small batch size
     #     True: (don't use). Set layer in training mode even when predicting
-    TRAIN_BN = False  # Defaulting to False since batch size is often small
+    TRAIN_BN = True  # Defaulting to False since batch size is often small
 
     # Gradient norm clipping
     GRADIENT_CLIP_NORM = 5.0
@@ -213,6 +213,7 @@ class Config(object):
     def __init__(self):
         """Set values of computed attributes."""
         # Effective batch size
+        self.BATCH_SIZE = self.GPU_COUNT * self.IMAGES_PER_GPU
 
         # Input image size
         if self.IMAGE_RESIZE_MODE == "crop":
