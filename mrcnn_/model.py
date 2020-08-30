@@ -98,34 +98,34 @@ class VA_Module(KL.Layer):
         self.batch_size = batch_size
         self.feature_bag = feature_bag
 
-        self.channel_attention = channel_attention(in_channel,  self.name + "_ca_", self.feature_bag)
-        self.spatial_attention = spatial_attention(self.name + "_sa_", self.feature_bag)
+        self.channel_attention = channel_attention(in_channel, "CA_" + self.name, self.feature_bag)
+        self.spatial_attention = spatial_attention("SA_"+self.name, self.feature_bag)
 
     def call(self, input_image):
-        batch, h, w, c = input_image.shape
-
         interval = int(self.feature_bag // 2)
         for b in range(self.batch_size):
             if b < interval:
-                feature = KL.Concatenate(axis=0)([input_image[:b],
-                                                  K.repeat_elements(input_image[b], interval-b, axis=0),
-                                                  input_image[b:b + interval + 1]])
+                feature = tf.concat([input_image[:b+1],
+                                                  K.repeat_elements(input_image[b:b+1], interval-b, axis=0),
+                                                  input_image[b+1:b + interval + 1]], axis=0)
             elif self.batch_size - b <= interval:
-                feature = KL.Concatenate(axis=0)([input_image[b - interval:b],
-                                                  K.repeat_elements(input_image[b], interval-(self.batch_size - b)+1, axis=0),
-                                                  input_image[b:]])
+                feature = tf.concat([input_image[b - interval:b],
+                                                  K.repeat_elements(input_image[b:b+1], interval-(self.batch_size - b)+1, axis=0),
+                                                  input_image[b:]], axis=0)
             else:
                 feature = input_image[b - interval:b + interval+1]
 
             ca = self.channel_attention([input_image[b:b + 1], feature])
             sa = self.spatial_attention([input_image[b:b + 1], feature])
 
-            ca_mul = KL.Multiply()([input_image[b:b + 1], ca])
-            sa_mul = KL.Multiply()([ca_mul, sa])
             if b == 0:
-                output = sa_mul
+                cas = ca
+                sas = sa
             else:
-                output = KL.Concatenate(axis=0)([output, sa_mul])
+                cas = tf.concat([cas, ca], axis=0)
+                sas = tf.concat([sas, sa], axis=0)
+
+        output = tf.multiply(tf.multiply(input_image, cas), sas)
         return output
 
 class channel_attention(KL.Layer):
@@ -152,7 +152,7 @@ class channel_attention(KL.Layer):
         self.c3_1 = KL.Conv2D(self.in_channel * self.feature_bag // self.reduction_ratio, (1, 1), strides=1, padding="same",
                        name=name + 'conv3_1', use_bias=True)
         self.bn3_1 = BatchNorm(name=name + 'bn3_1')
-        self.c3_2 = KL.Conv2D(self.in_channel * 3, (1, 1), strides=1, padding="same",
+        self.c3_2 = KL.Conv2D(self.in_channel * self.feature_bag, (1, 1), strides=1, padding="same",
                        name=name + 'conv3_2', use_bias=True)
         self.bn3_2 = BatchNorm(name=name + 'bn3_2')
 
@@ -2491,9 +2491,9 @@ class MaskRCNN(object):
         # Pre-defined layer regular expressions
         layer_regex = {
             # all layers but the backbone
-            "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            "heads": r"(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)|(P.*)",
             # From a specific Resnet stage and up
-            "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
+            "3+": r"(res3.*)|(bn3.*)|(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)|(P.*)",
             "4+": r"(res4.*)|(bn4.*)|(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
             "5+": r"(res5.*)|(bn5.*)|(mrcnn\_.*)|(rpn\_.*)|(fpn\_.*)",
             # All layers
