@@ -21,6 +21,7 @@ import tensorflow.keras.layers as KL
 import tensorflow.keras.utils as KU
 from tensorflow.python.eager import context
 import tensorflow.keras.models as KM
+from tensorflow.keras.callbacks import LearningRateScheduler
 
 from mrcnn_ import utils
 
@@ -106,26 +107,25 @@ class VA_Module(KL.Layer):
         for b in range(self.batch_size):
             if b < interval:
                 feature = tf.concat([input_image[:b+1],
-                                                  K.repeat_elements(input_image[b:b+1], interval-b, axis=0),
-                                                  input_image[b+1:b + interval + 1]], axis=0)
+                                     K.repeat_elements(input_image[b:b+1], interval-b, axis=0),
+                                     input_image[b+1:b + interval + 1]], axis=0)
             elif self.batch_size - b <= interval:
                 feature = tf.concat([input_image[b - interval:b],
-                                                  K.repeat_elements(input_image[b:b+1], interval-(self.batch_size - b)+1, axis=0),
-                                                  input_image[b:]], axis=0)
+                                     K.repeat_elements(input_image[b:b+1], interval-(self.batch_size - b)+1, axis=0),
+                                     input_image[b:]], axis=0)
             else:
                 feature = input_image[b - interval:b + interval+1]
 
-            ca = self.channel_attention([input_image[b:b + 1], feature])
-            sa = self.spatial_attention([input_image[b:b + 1], feature])
-
-            if b == 0:
-                cas = ca
-                sas = sa
+            feature = K.expand_dims(feature, axis=0)
+            if b==0:
+                features = feature
             else:
-                cas = tf.concat([cas, ca], axis=0)
-                sas = tf.concat([sas, sa], axis=0)
+                features = tf.concat([features, feature], axis=0)
 
-        output = tf.multiply(tf.multiply(input_image, cas), sas)
+        ca = self.channel_attention([input_image, features])
+        sa = self.spatial_attention([input_image, features])
+
+        output = tf.multiply(tf.multiply(input_image, ca), sa)
         return output
 
 class channel_attention(KL.Layer):
@@ -161,11 +161,11 @@ class channel_attention(KL.Layer):
 
     def call(self, inputs):
         """Build a Volumetric-Attention graph.
-            input_image: [1, h, w, c]
-            feature: [3, h, w, c]
+            input_image: [batch, h, w, c]
+            feature: [batch, feature_bag, h, w, c]
         """
         input_image = inputs[0]
-        feature = inputs[1]
+        features = inputs[1]
 
         x = spatial_pool(input_image)
         x = self.c1_1(x)
@@ -173,12 +173,11 @@ class channel_attention(KL.Layer):
         x = KL.Activation('relu')(x)
         x = self.c1_2(x)
         x = self.bn1_2(x, training=False)
-        x = KL.Activation('relu')(x)  # [1, 1, 1, c]
+        x = KL.Activation('relu')(x)  # [batch, 1, 1, c]
 
-        f = K.expand_dims(feature, axis=0)
-        f = KL.Permute((2, 3, 4, 1))(f)
+        f = KL.Permute((2, 3, 4, 1))(features)
         f = KL.Reshape((f.shape[1], f.shape[2], -1))(f)
-        f = spatial_pool(f)  # [1, 1, 1, feature_bag*c]
+        f = spatial_pool(f)  # [batch, 1, 1, feature_bag*c]
 
         f1 = self.c2_1(f)
         f1 = self.bn2_1(f1, training=False)
@@ -192,17 +191,17 @@ class channel_attention(KL.Layer):
         f2 = KL.Activation('relu')(f2)
         f2 = self.c3_2(f2)
         f2 = self.bn3_2(f2, training=False)
-        f2 = KL.Activation('relu')(f2)
+        f2 = KL.Activation('relu')(f2) # [batch, 1, 1, feature_bag*c]
 
-        x = KL.Reshape((1, -1))(x)
-        f1 = KL.Reshape((-1, self.feature_bag))(f1)
-        x_f1 = K.dot(x, f1)
-        x_f1 = KL.Reshape((1, -1))(x_f1)
-        x_f1 = KL.Activation("softmax")(x_f1)
+        x = KL.Reshape((1, -1))(x) # [batch, 1, c]
+        f1 = KL.Reshape((self.feature_bag, -1))(f1) # [batch, feature_bag, c]
+        x_f1 = KL.Dot(axes=(2))([x, f1]) # [batch, 1, feature_bag]
+        x_f1 = KL.Softmax(axis=2)(x_f1)
 
-        f2 = KL.Reshape((self.feature_bag, -1))(f2)
-        x_f1_f2 = K.dot(x_f1, f2)
+        f2 = KL.Reshape((-1, self.feature_bag))(f2)
+        x_f1_f2 = KL.Dot(axes=(2))([x_f1, f2]) # [batch, 1, c]
 
+        x_f1_f2 = KL.Reshape((1, 1, -1))(x_f1_f2) # [batch, 1, 1, c]
         out = KL.Activation('relu')(x_f1_f2)
         out = self.c_4(out)
         out = KL.Activation('sigmoid')(out)
@@ -230,22 +229,30 @@ class spatial_attention(KL.Layer):
 
     def call(self, inputs):
         """Build a Volumetric-Attention graph.
-               input_image: [1, h, w, c]
-               feature: [3, h, w, c]
+               input_image: [batch, h, w, c]
+               feature: [batch, feature_bag, h, w, c]
            """
         input_image = inputs[0]
-        feature = inputs[1]
+        features = inputs[1]
         _, h, w, c = input_image.shape
 
         x = channel_pool(input_image)
         x = self.c1_1(x)
         x = self.bn1_1(x, training=False)
-        x = KL.Activation('relu')(x)  # [1, h, w, 2]
+        x = KL.Activation('relu')(x)  # [batch, h, w, 2]
 
-        f = channel_pool(feature)
+        f = K.expand_dims(features, axis=0)
+        f = KL.Reshape((-1, h, w, c))(f)
+        f = K.squeeze(f, axis=0)
+
+        f = channel_pool(f) # [batch * feature_bag, h, w, 2]
+
         f = K.expand_dims(f, axis=0)
+        f = KL.Reshape((-1, self.feature_bag, h, w, 2))(f)
+        f = K.squeeze(f, axis=0)
+
         f = KL.Permute((2, 3, 4, 1))(f)
-        f = KL.Reshape((h, w, -1))(f)
+        f = KL.Reshape((h, w, -1))(f) # [batch, h, w, 2 * feature_bag]
 
         f1 = self.c2_1(f)
         f1 = self.bn2_1(f1, training=False)
@@ -255,14 +262,13 @@ class spatial_attention(KL.Layer):
         f2 = self.bn2_2(f2, training=False)
         f2 = KL.Activation('relu')(f2)
 
-        x = KL.Reshape((-1, 2))(x)
+        x = KL.Reshape((2, -1))(x)
         f1 = KL.Reshape((self.feature_bag * 2, -1))(f1)
-        x_f1 = K.dot(f1, x)
-        x_f1 = KL.Reshape((-1, 2))(x_f1)
-        x_f1 = KL.Activation("softmax")(x_f1)  # [feature_bag * 2, 2]
+        x_f1 = KL.Dot(axes=(2))([f1, x])
+        x_f1 = KL.Softmax(axis=1)(x_f1) # [feature_bag * 2, 2]
 
-        f2 = KL.Reshape((-1, self.feature_bag * 2))(f2)
-        x_f1_f2 = K.dot(f2, x_f1)
+        f2 = KL.Reshape((-1, 2))(f2)
+        x_f1_f2 = KL.Dot(axes=(2))([f2, x_f1])
         x_f1_f2 = KL.Reshape((h, w, -1))(x_f1_f2)
 
         out = KL.Activation('relu')(x_f1_f2)
@@ -2452,6 +2458,15 @@ class MaskRCNN(object):
         self.checkpoint_path = self.checkpoint_path.replace(
             "*epoch*", "{epoch:04d}")
 
+    def step_decay(self, epoch):
+        initial_lrate = 0.0001  # 5
+        drop = 0.5
+        epochs_drop = 50.0  # 20
+
+        lrate = initial_lrate * math.pow(drop,
+                                         math.floor((1 + epoch) / epochs_drop))
+        return lrate
+
     def train(self, train_dataset, val_dataset, learning_rate, epochs, layers,
               augmentation=None, custom_callbacks=None, no_augmentation_sources=None):
         """Train the model.
@@ -2511,12 +2526,14 @@ class MaskRCNN(object):
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
 
+        change_lr = LearningRateScheduler(self.step_decay)
         # Callbacks
         callbacks = [
             keras.callbacks.TensorBoard(log_dir=self.log_dir,
                                         histogram_freq=0, write_graph=True, write_images=False),
             keras.callbacks.ModelCheckpoint(self.checkpoint_path,
                                             verbose=1, save_weights_only=True),
+            change_lr
         ]
 
         # Add custom callbacks to the list
@@ -2671,7 +2688,7 @@ class MaskRCNN(object):
         assert self.mode == "inference", "Create model in inference mode."
 
         results = []
-        masks = []
+        masks = np.zeros((64, 128, 128))
         for i in range(images.shape[0]):
             # Mold inputs to format expected by the neural network
             molded_images, image_metas, windows = self.mold_inputs(images[i:i+1])
@@ -2709,10 +2726,13 @@ class MaskRCNN(object):
                 "scores": final_scores,
                 "masks": final_masks,
             })
-            masks.append(final_masks)
-            print(final_masks.shape)
 
-        return np.array(masks)
+            if final_masks.shape[2] == 0:
+                pass
+            else:
+                masks[i, :, :] = final_masks[:, :, 0]
+
+        return masks
 
     def detect_molded(self, molded_images, image_metas, verbose=0):
         """Runs the detection pipeline, but expect inputs that are

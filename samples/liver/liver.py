@@ -234,12 +234,13 @@ def test(model, dst_path):
     for image_id in image_ids:
         info = dataset_test.image_info[image_id]
         print("Processing {} images".format(info["path"].split("\\")[-1]))
+        print((info["depth"], info["height"], info["width"]))
 
         image = dataset_test.load_image(image_id)
-        out_label = model.detect(image, verbose=1)
+        out_label = model.detect(image, verbose=0)
 
-        out_label = iu.resize_image(out_label, True, (info["depth"], info["height"], info["width"]))
-        iu.write_raw(out_label, os.path.join(dst_path, '%s' % info["path"].split("\\")[-1]))
+        out_label = iu.resize_image(out_label, True, (info["depth"], info["height"], info["width"]), binary_threshold=0.5)
+        iu.write_raw(out_label.astype(np.uint8), os.path.join(dst_path, '%s' % info["path"].split("\\")[-1]))
 
 ############################################################
 #  Training
