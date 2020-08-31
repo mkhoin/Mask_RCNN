@@ -1322,10 +1322,18 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
     target_class_ids = tf.cast(target_class_ids, 'int64')
 
     # Find predictions of classes that are not in the dataset.
-    pred_class_ids = tf.argmax(input=pred_class_logits, axis=2)
+    #pred_class_ids = tf.argmax(input=pred_class_logits, axis=2)
     # TODO: Update this line to work with batch > 1. Right now it assumes all
     #       images in a batch have the same active_class_ids
     #pred_active = tf.gather(active_class_ids[0], pred_class_ids)
+
+    alpha = 0.25
+    gamma = 2.
+
+    #pt_1 = tf.where(tf.equal(target_class_ids, 1), pred_class_logits, tf.ones_like(pred_class_logits))
+    #pt_0 = tf.where(tf.equal(target_class_ids, 0), pred_class_logits, tf.zeros_like(pred_class_logits))
+
+    #loss = -K.mean(alpha * K.pow(1. - pt_1, gamma) * K.log(pt_1))-K.mean((1-alpha) * K.pow( pt_0, gamma) * K.log(1. - pt_0))
 
     # Loss
     loss = tf.nn.sparse_softmax_cross_entropy_with_logits(
@@ -1333,12 +1341,12 @@ def mrcnn_class_loss_graph(target_class_ids, pred_class_logits,
 
     # Erase losses of predictions of classes that are not in the active
     # classes of the image.
-    #loss = loss * pred_active
+    #loss = loss #* pred_active
 
     # Computer loss mean. Use only predictions that contribute
     # to the loss to get a correct mean.
-    loss = tf.reduce_sum(input_tensor=loss) #/ tf.reduce_sum(input_tensor=pred_active)
-    return loss
+    loss = tf.reduce_sum(input_tensor=loss)
+    return loss / target_class_ids.shape[0]
 
 
 def mrcnn_bbox_loss_graph(target_bbox, target_class_ids, pred_bbox):
@@ -2090,10 +2098,10 @@ class MaskRCNN(object):
         # subsampling from P5 with stride of 2.
         P6 = KL.MaxPooling2D(pool_size=(1, 1), strides=2, name="fpn_p6")(P5)
 
-        #P2 = VA_Module(256, config.BATCH_SIZE, "P2")(P2)
-        #P3 = VA_Module(256, config.BATCH_SIZE, "P3")(P3)
-        #P4 = VA_Module(256, config.BATCH_SIZE, "P4")(P4)
-        #P5 = VA_Module(256, config.BATCH_SIZE, "P5")(P5)
+        P2 = VA_Module(256, config.BATCH_SIZE, "P2")(P2)
+        P3 = VA_Module(256, config.BATCH_SIZE, "P3")(P3)
+        P4 = VA_Module(256, config.BATCH_SIZE, "P4")(P4)
+        P5 = VA_Module(256, config.BATCH_SIZE, "P5")(P5)
 
         #P2 = va_graph(P2, 256, config.BATCH_SIZE, "P2")
         #P3 = va_graph(P3, 256, config.BATCH_SIZE, "P3")

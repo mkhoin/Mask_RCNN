@@ -73,7 +73,7 @@ class Config(object):
     NUM_CLASSES = 1 + 1 # Override in sub-classes
 
     # Length of square anchor side in pixels
-    RPN_ANCHOR_SCALES = (4, 8, 16, 32, 64)
+    RPN_ANCHOR_SCALES = (8, 16, 32, 64, 128)
 
     # Ratios of anchors at each cell (width/height)
     # A value of 1 represents a square anchor, and 0.5 is a wide anchor
@@ -100,7 +100,7 @@ class Config(object):
 
     # If enabled, resizes instance masks to a smaller size to reduce
     # memory load. Recommended when using high-resolution images.
-    USE_MINI_MASK = True
+    USE_MINI_MASK = False
     MINI_MASK_SHAPE = (56, 56)  # (height, width) of the mini-mask
 
     # Input image resizing
@@ -187,11 +187,11 @@ class Config(object):
     # Loss weights for more precise optimization.
     # Can be used for R-CNN training setup.
     LOSS_WEIGHTS = {
-        "rpn_class_loss": 1e-1,
-        "rpn_bbox_loss": 1e-1,
-        "mrcnn_class_loss": 1e-2,
+        "rpn_class_loss": 1.,
+        "rpn_bbox_loss": 1.,
+        "mrcnn_class_loss": 1.,
         "mrcnn_bbox_loss": 1.,
-        "mrcnn_mask_loss": 10.
+        "mrcnn_mask_loss": 1.
     }
 
     # Use RPN ROIs or externally generated ROIs for training

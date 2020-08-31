@@ -218,7 +218,7 @@ def train(model):
     print("Training network heads")
     model.train(dataset_train, dataset_val,
                 learning_rate=config.LEARNING_RATE,
-                epochs=150,
+                epochs=10,
                 layers='all')
 
 
@@ -239,8 +239,8 @@ def test(model, dst_path):
         image = dataset_test.load_image(image_id)
         out_label = model.detect(image, verbose=0)
 
-        out_label = iu.resize_image(out_label, True, (info["depth"], info["height"], info["width"]), binary_threshold=0.5)
-        iu.write_raw(out_label.astype(np.uint8), os.path.join(dst_path, '%s' % info["path"].split("\\")[-1]))
+        out_label = iu.resize_image(out_label, True, (info["depth"], info["height"], info["width"]))
+        iu.write_raw(out_label.astype(np.uint8), os.path.join(dst_path, '%s' % info["label_path"].split("\\")[-1]))
 
 ############################################################
 #  Training
@@ -258,7 +258,7 @@ if __name__ == '__main__':
     parser.add_argument('--dataset', required=False,
                         metavar="/path/to/balloon/dataset/",
                         help='Directory of the Balloon dataset',
-                        default="D:/chungmy/PyTorch/CENet-SR-AutoNet/database/nfold_90")
+                        default="D:/chungmy/PyTorch/CENet-SR-AutoNet/database/nfold_90") # nfold_50
     parser.add_argument('--testdataset', required=False,
                         metavar="/path/to/balloon/dataset/",
                         help='Directory of the Balloon dataset',
@@ -297,7 +297,7 @@ if __name__ == '__main__':
             # Set batch size to 1 since we'll be running inference on
             # one image at a time. Batch size = GPU_COUNT * IMAGES_PER_GPU
             GPU_COUNT = 1
-            IMAGES_PER_GPU = 1
+            IMAGES_PER_GPU = 64
         config = InferenceConfig()
     config.display()
 
